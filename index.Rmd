@@ -1,0 +1,87 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "hetszunyu (A. Toldy)"
+date: "September 1, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+In this course project for Practical Machine Learning, I will attempt to develop a model for predicting the different types of dumbbell lifts (represented by the A-E values of the "classe" variable in the data sets) from the Weight Lifting Exercise Dataset in http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har.
+
+First, let's load and clean the data, the packages, and set the seed. Due to the incredibly slow running of the code, I have taken several steps to reduce the amount of predictors after some research (removing NA containing columns, removing near zero variance predictors) in addition to implementing parallel processing according to the instructions here: https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md .
+
+```{r}
+set.seed(1249845)
+library(caret)
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile="training.csv")
+pml_tr <- read.csv("training.csv", header=TRUE, strip.white = TRUE)
+pml_tr <- subset(pml_tr, select=colSums(is.na(pml_tr)) == 0) # Remove all columns containing NAs - these columns contain more than 10k NAs anyway
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile="testing.csv")
+pml_test <- read.csv("testing.csv", header=TRUE, strip.white = TRUE)
+pml_test <- subset(pml_test, select=colSums(is.na(pml_test)) == 0)
+pml_tr <- pml_tr[, -c(1:7)] # the first 7 columns don't have anything to do with the sensor data that we are trying to use to predict classe
+pml_test <- pml_test[, -c(1:7)]
+```
+
+Next, let's split our training data further to perform the testing of the models on the training data itself.
+
+```{r}
+inTrain <- createDataPartition(pml_tr$classe, p = 0.7, list = FALSE)
+pml_train <- pml_tr[inTrain, ]
+pml_val <- pml_tr[-inTrain, ]
+nearz <- nearZeroVar(pml_train)
+pml_train<- pml_train[, -nearz]
+pml_val <- pml_val[,-nearz]
+```
+
+##Setting Up The Model
+
+#Parallel Processing
+
+Let's set up parallel processing and training control to enable quicker processing (code taken from the link in the introduction).
+
+```{r}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+```
+
+#Developing the Models
+
+Now that we've set up the system, we can run the models. Let's choose 3 methods that are likely to give different accuracies, just for fun. On the "low" end, let's run a simple Linear Discriminant Analysis, add a GBM to the mix as an "intermediate" method, and run a Random Forest as the method that's likely to give the highest accuracy. While the models are being built, we can go drink some beer and watch cartoons, it's gonna take a while.
+
+```{r}
+modLDA <- train(classe~., data=pml_train, method="lda", trControl=fitControl)
+modGBM <- train(classe~., data=pml_train, method="gbm", trControl=fitControl, verbose=FALSE)
+modRF <- train(classe~., data=pml_train, method="rf", trControl=fitControl)
+```
+
+#Validating the Models
+
+Now that we built our models, we can validate them (test their accuracy) on the validation data set (recall, this is the one we split from the training). We do this by comparing their predictions' confusion matrices (we'll only print the accuracy here for the sake of convenience).
+
+```{r}
+predictLDA <- predict(modLDA, newdata=pml_val)
+confusionMatrix(predictLDA, pml_val$classe)$overall[1]
+predictGBM <- predict(modGBM, newdata=pml_val)
+confusionMatrix(predictGBM, pml_val$classe)$overall[1]
+predictRF <- predict(modRF, newdata=pml_val)
+confusionMatrix(predictRF, pml_val$classe)$overall[1]
+```
+
+We can see that the accuracy indeeed increases in the expected order, with LDA's around 70%, GBM's around 95%, and RF's above 99%. Therefore, to predict the results of the test set, we will use the method with the highest accuracy (lowest out of sample error rate), that is the RF method.
+
+#Predicting the Values for the Test Set
+
+```{r}
+predict(modRF, newdata=pml_test)
+```
